@@ -1,0 +1,8 @@
+ext/*/
+ext/msdir
+logs_slurm/*
+results/*
+.snakemake/*
+utils/__pycache__/*
+nohup.out
+seedms

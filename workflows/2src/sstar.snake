@@ -1,0 +1,247 @@
+import sys
+sys.path.insert(0, './')
+
+import os
+import demes
+import numpy as np
+import pandas as pd
+from scipy.stats import norm
+from scipy.stats import nbinom
+from utils.utils import *
+
+
+try:
+    libr_dir = os.environ["CONDA_PREFIX"] + "/lib/R/library"
+except:
+    libr_dir = os.environ["CONDA"] + "/lib/R/library"
+
+
+configfile: "config/snakemake/config.yaml"
+
+ms_exec = config["ms_exec"]
+
+seq_len = config["seq_len"] * 10**6
+replicates = config["replicates"]
+output_dir = config["output_dir"]
+
+np.random.seed(config["seed"])
+seed_list = np.random.random_integers(1,2**31,replicates)
+demo_model_list = config["2src_demo_models"]
+snp_num_list = np.arange(25,705,5)
+quantile_list = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 0.995, 0.999]
+nref_list = [10, 50]
+ntgt_list = [1]
+
+
+# 5: Central Chimpanzees
+# 6: Western Chimpanzees
+# N0 = 1000
+graph = demes.load("./config/simulation/models/BonoboGhost_4K19_no_introgression.yaml")
+ChimpBonoboGhost_ms_params = {}
+ChimpBonoboGhost_ms_params["10"] = demes.to_ms(graph, N0=1000, samples=[0, 0, 0, 0, 0, 2, 20])
+ChimpBonoboGhost_ms_params["50"] = demes.to_ms(graph, N0=1000, samples=[0, 0, 0, 0, 0, 2, 100])
+
+# 0: YRI
+# 7: Papuan
+# N0 = 1000
+graph = demes.load("./config/simulation/models/HumanNeanderthalDenisovan_PapuansOutOfAfrica_10J19_no_introgression.yaml")
+HumanNeanderthalDenisovan_ms_params = {}
+HumanNeanderthalDenisovan_ms_params["10"] = demes.to_ms(graph, N0=1000, samples=[20, 0, 0, 0, 0, 0, 0, 2, 0, 0])
+HumanNeanderthalDenisovan_ms_params["50"] = demes.to_ms(graph, N0=1000, samples=[100, 0, 0, 0, 0, 0, 0, 2, 0, 0])
+
+
+rule all:
+    input:
+        output_dir + "inference/sstar/sstar_2src_accuracy.txt",
+
+
+rule mut_rec_combination:
+    output:
+        rates = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/rates.2src.combination",
+    resources: time_min=60, mem_mb=5000, cpus=1,
+    threads: 1,
+    run:
+        seq_len = 50000 
+        if wildcards.demog == 'ChimpBonoboGhost': seq_len = 40000
+        N0 = 1000
+        mut_rate_mean = 1.4e-8
+        if wildcards.demog == 'ChimpBonoboGhost': mut_rate_mean = 1.2e-8
+        scaled_mut_rate_mean = 4*N0*mut_rate_mean*seq_len
+        scaled_mut_rate_sdv = 0.233
+        rec_rate_mean = 0.7e-8
+        scaled_rec_rate_mean = 4*N0*rec_rate_mean*seq_len
+        mut_rate_list = norm.rvs(loc=scaled_mut_rate_mean, scale=scaled_mut_rate_sdv, size=20000)
+        rec_rate_list = nbinom.rvs(n=0.5, p=0.5/(0.5+scaled_rec_rate_mean), size=20000)
+
+        with open(output.rates, 'w') as o:
+            for i in range(len(mut_rate_list)):
+                if mut_rate_list[i] < 0.001: mut_rate_list[i] = 0.001
+                if rec_rate_list[i] < 0.001: rec_rate_list[i] = 0.001
+                mut_rate = mut_rate_list[i]
+                rec_rate = rec_rate_list[i]
+                o.write(f'{mut_rate}\t{rec_rate}\n')
+
+
+rule simulate_glm_data:
+    input:
+        rates = rules.mut_rec_combination.output.rates,
+    output:
+        ms = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/{snp_num}/sim2src.ms",
+    params:
+        ms_exec = config["ms_exec"],
+        nsam = lambda wildcards: 22 if wildcards.nref == '10' else 102,
+        nreps = 20000,
+        seq_len = lambda wildcards: 40000 if wildcards.demog == 'ChimpBonoboGhost' else 50000,
+        ms_params = lambda wildcards: ChimpBonoboGhost_ms_params[wildcards.nref] if wildcards.demog == 'ChimpBonoboGhost' else HumanNeanderthalDenisovan_ms_params[wildcards.nref],
+    resources: time_min=60, mem_mb=5000, cpus=1,
+    threads: 1,
+    shell:
+        """
+        cat {input.rates} | {params.ms_exec} {params.nsam} {params.nreps} -t tbs -r tbs {params.seq_len} -s {wildcards.snp_num} {params.ms_params} > {output.ms}
+        """
+
+
+rule ms2vcf:
+    input:
+        ms = rules.simulate_glm_data.output.ms,
+    output:
+        vcf = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/{snp_num}/sim2src.vcf",
+    params:
+        nsam = lambda wildcards: 22 if wildcards.nref == '10' else 102,
+        seq_len = lambda wildcards: 40000 if wildcards.demog == 'ChimpBonoboGhost' else 50000,
+    resources: time_min=60, mem_mb=5000, cpus=1,
+    threads: 1,
+    run:
+        ms2vcf(input.ms, output.vcf, params.nsam, params.seq_len) 
+
+
+rule cal_score:
+    input:
+        vcf = rules.ms2vcf.output.vcf,
+        ref_ind = "config/sstar/simulation/{demog}/nref_{nref}/ntgt_{ntgt}/sim.ref.ind.list",
+        tgt_ind = "config/sstar/simulation/{demog}/nref_{nref}/ntgt_{ntgt}/sim.tgt.ind.list",
+    output:
+        score = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/{snp_num}/sim2src.sstar.score",
+    params:
+        seq_len = lambda wildcards: 40000 if wildcards.demog == 'ChimpBonoboGhost' else 50000,
+    resources: time_min=3000, mem_mb=5000, cpus=1,
+    threads: 1,
+    shell:
+        """
+        sstar score --vcf {input.vcf} --ref {input.ref_ind} --tgt {input.tgt_ind} --output {output.score} --thread {threads} --win-len {params.seq_len} --win-step {params.seq_len}
+        """
+
+
+rule cal_quantile:
+    input:
+        score = rules.cal_score.output.score,
+    output:
+        quantile = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/{snp_num}/sim2src.sstar.quantile",
+    params:
+        sim_quantiles = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.98, 0.99, 0.995, 0.999]
+    resources: time_min=3000, mem_mb=5000, cpus=1,
+    threads: 1,
+    run:
+        df = pd.read_csv(input.score, sep="\t").dropna()
+        mean_df = df.groupby(['chrom', 'start', 'end'], as_index=False)['S*_score'].mean().dropna()
+        scores = np.quantile(mean_df['S*_score'], params.sim_quantiles)
+        with open(output.quantile, 'w') as o:
+            for i in range(len(scores)):
+                o.write(f'{scores[i]}\t{wildcards.snp_num}\t{params.sim_quantiles[i]}\n')
+
+
+rule quantile_summary:
+    input:
+        hum_nref_10 = expand(output_dir + "inference/sstar/HumanNeanderthalDenisovan/simulation/nref_10/ntgt_1/{snp_num}/sim2src.sstar.quantile", snp_num=snp_num_list),
+        hum_nref_50 = expand(output_dir + "inference/sstar/HumanNeanderthalDenisovan/simulation/nref_50/ntgt_1/{snp_num}/sim2src.sstar.quantile", snp_num=snp_num_list),
+        bon_nref_10 = expand(output_dir + "inference/sstar/ChimpBonoboGhost/simulation/nref_10/ntgt_1/{snp_num}/sim2src.sstar.quantile", snp_num=snp_num_list),
+        bon_nref_50 = expand(output_dir + "inference/sstar/ChimpBonoboGhost/simulation/nref_50/ntgt_1/{snp_num}/sim2src.sstar.quantile", snp_num=snp_num_list),
+    output:
+        hum_nref_10 = output_dir + "inference/sstar/HumanNeanderthalDenisovan/simulation/nref_10/ntgt_1/quantile.2src.summary.txt",
+        hum_nref_50 = output_dir + "inference/sstar/HumanNeanderthalDenisovan/simulation/nref_50/ntgt_1/quantile.2src.summary.txt",
+        bon_nref_10 = output_dir + "inference/sstar/ChimpBonoboGhost/simulation/nref_10/ntgt_1/quantile.2src.summary.txt",
+        bon_nref_50 = output_dir + "inference/sstar/ChimpBonoboGhost/simulation/nref_50/ntgt_1/quantile.2src.summary.txt",
+    resources: time_min=3000, mem_mb=5000, cpus=1,
+    threads: 1,
+    shell:
+        """
+        cat {input.hum_nref_10} | sed '1iS*_score\\tSNP_number\\tquantile\n' > {output.hum_nref_10}
+        cat {input.hum_nref_50} | sed '1iS*_score\\tSNP_number\\tquantile\n' > {output.hum_nref_50}
+        cat {input.bon_nref_10} | sed '1iS*_score\\tSNP_number\\tquantile\n' > {output.bon_nref_10}
+        cat {input.bon_nref_50} | sed '1iS*_score\\tSNP_number\\tquantile\n' > {output.bon_nref_50}
+        """
+
+
+rule sstar_score:
+    input:
+        vcf = output_dir + "simulated_data/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sim2src.biallelic.vcf.gz",
+        ref_ind = "config/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/sim.ref.ind.list",
+        tgt_ind = "config/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/sim.tgt.ind.list",
+        src1_ind = "config/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/sim.src1.ind.list",
+        src2_ind = "config/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/sim.src2.ind.list",
+    output:
+        score = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sstar.2src.out.score",
+        src1_match_pct = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sstar.2src.out.src1.match.pct",
+        src2_match_pct = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sstar.2src.out.src2.match.pct",
+    params:
+        seq_len = lambda wildcards: 40000 if wildcards.demog == 'ChimpBonoboGhost' else 50000,
+    resources: time_min=3000, mem_mb=10000, cpus=1,
+    threads: 1,
+    shell:
+        """
+        sstar score --vcf {input.vcf} --ref {input.ref_ind} --tgt {input.tgt_ind} --output {output.score} --thread {threads} --win-len {params.seq_len} --win-step 10000
+        sleep 180
+        sstar matchrate --vcf {input.vcf} --ref {input.ref_ind} --tgt {input.tgt_ind} --src {input.src1_ind} --score {output.score} --output {output.src1_match_pct}
+        sstar matchrate --vcf {input.vcf} --ref {input.ref_ind} --tgt {input.tgt_ind} --src {input.src2_ind} --score {output.score} --output {output.src2_match_pct}
+        """
+
+
+rule sstar_threshold:
+    input:
+        score = rules.sstar_score.output.score,
+        summary = output_dir + "inference/sstar/{demog}/simulation/nref_{nref}/ntgt_{ntgt}/quantile.2src.summary.txt",
+    output:
+        quantile = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sstar.2src.quantile.{quantile}.out",
+    params:
+        R_LIBS = libr_dir,
+    resources: time_min=3000, mem_mb=10000, cpus=1,
+    threads: 1,
+    shell:
+        """
+        export R_LIBS={params.R_LIBS}
+        sstar threshold --score {input.score} --sim-data {input.summary} --quantile {wildcards.quantile} --output {output.quantile}
+        """
+
+
+rule sstar_process_output:
+    input:
+        src1_match_pct = rules.sstar_score.output.src1_match_pct,
+        src2_match_pct = rules.sstar_score.output.src2_match_pct,
+        threshold = rules.sstar_threshold.output.quantile,
+        src1_true_tracts = output_dir + "simulated_data/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sim2src.src1.introgressed.tracts.bed",
+        src2_true_tracts = output_dir + "simulated_data/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/sim2src.src2.introgressed.tracts.bed",
+    output:
+        src1_inferred_tracts = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/{quantile}/sstar.2src.out.{quantile}.src1.bed",
+        src2_inferred_tracts = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/{quantile}/sstar.2src.out.{quantile}.src2.bed",
+        accuracy = output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/{quantile}/sstar.2src.out.{quantile}.accuracy",
+    threads: 1
+    run:
+        process_sstar_2src_output(input.src1_match_pct, input.src2_match_pct, input.threshold, output.src1_inferred_tracts, output.src2_inferred_tracts)
+        src1_precision, src1_recall = cal_accuracy(input.src1_true_tracts, output.src1_inferred_tracts)
+        src2_precision, src2_recall = cal_accuracy(input.src2_true_tracts, output.src2_inferred_tracts)
+        with open(output.accuracy, 'w') as o:
+           o.write(f'{wildcards.demog}\tnref_{wildcards.nref}_ntgt_{wildcards.ntgt}\t{wildcards.quantile}\tsrc1\t{src1_precision}\t{src1_recall}\n')
+           o.write(f'{wildcards.demog}\tnref_{wildcards.nref}_ntgt_{wildcards.ntgt}\t{wildcards.quantile}\tsrc2\t{src2_precision}\t{src2_recall}\n')
+
+
+rule accuracy_summary:
+    input:
+        accuracy_files = expand(output_dir + "inference/sstar/{demog}/nref_{nref}/ntgt_{ntgt}/{seed}/{quantile}/sstar.2src.out.{quantile}.accuracy",
+                                demog=demo_model_list, nref=nref_list, ntgt=ntgt_list, seed=seed_list, quantile=quantile_list),
+    output:
+        accuracy_table = output_dir + "inference/sstar/sstar_2src_accuracy.txt",
+    threads: 1
+    shell:
+        """
+        cat {input.accuracy_files} | sed '1idemography\\tsample\\tcutoff\\tsrc\\tprecision\\trecall' > {output.accuracy_table}
+        """
