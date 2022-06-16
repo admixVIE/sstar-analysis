@@ -40,6 +40,7 @@ Users also need to download `ms.tar.gz` from [Hudson Lab](http://home.uchicago.e
 
 	cd msdir
 	${CONDA_PREFIX}/bin/gcc -o ms ms.c streec.c rand1.c -lm
+	cd ../..
 
 ## Running the pipelines
 
