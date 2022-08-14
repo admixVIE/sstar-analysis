@@ -29,4 +29,4 @@ dependencies:
   - tskit
   - vcftools
   - pip:
-      - sstar==1.1.0
+      - sstar

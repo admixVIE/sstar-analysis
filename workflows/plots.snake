@@ -14,8 +14,6 @@ rule all:
                    "archaicseeker2.2src.mean.accuracy.txt",
                ]),
         output_dir + "plots/precision-recall.pdf",
-        output_dir + "plots/1src_prauc.txt",
-        output_dir + "plots/2src_prauc.txt",
 
 
 rule plot_accuracy:
@@ -34,8 +32,6 @@ rule plot_accuracy:
         sprime_2src_accuracy_mean = output_dir + "plots/sprime.2src.mean.accuracy.txt",
         archaicseeker2_2src_accuracy_mean = output_dir + "plots/archaicseeker2.2src.mean.accuracy.txt",
         accuracy = output_dir + "plots/precision-recall.pdf",
-        auc1 = output_dir + "plots/1src_prauc.txt",
-        auc2 = output_dir + "plots/2src_prauc.txt",
     threads: 1,
     script:
         "plots.py"

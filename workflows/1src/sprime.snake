@@ -18,7 +18,7 @@ seed_list = np.random.random_integers(1,2**31,replicates)
 demo_model_list = config["1src_demo_models"]
 threshold_list = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000]
 nref_list = [10, 50]
-ntgt_list = [1, 10]
+ntgt_list = [1]
 
 
 rule all:
