@@ -8,9 +8,8 @@ This repo contains [Snakemake](https://snakemake.readthedocs.io/en/stable/) pipe
 
 To replicate our analysis, users should install [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html) first, then use the following commands to create a virtual environment for the analysis.
 
-	conda config --set safety_checks disabled
-	conda config --set channel_priority strict
-	conda env create -f environment.yml
+	conda install mamba -n base -c conda-forge
+	mamba env create -f environment.yml
 	conda activate sstar-analysis
 
 For tools that cannot be installed through `conda`, users could follow the commands below.

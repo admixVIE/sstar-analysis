@@ -12,14 +12,12 @@ jobs:
       uses: actions/setup-python@v3
       with:
         python-version: 3.8
-    - name: Add conda to system path
-      run: |
-        echo $CONDA/bin >> $GITHUB_PATH
-    - name: Install dependencies
-      run: |
-        conda config --set safety_checks disabled
-        conda config --set channel_priority strict
-        conda env create -f environment.yml
+    - name: Add micromamba to system path
+      uses: mamba-org/provision-with-micromamba@main
+      with:
+        environment-name: sstar-analysis
+        activate-environment: sstar-analysis
+        environment-file: environment.yml
     - name: Test dry-run
       run: |
-        conda run -n sstar-analysis snakemake -np --use-conda --conda-frontend conda
+        micromamba run -n sstar-analysis snakemake -np --use-conda --conda-frontend conda
