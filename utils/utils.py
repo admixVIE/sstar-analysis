@@ -273,6 +273,7 @@ def cal_accuracy(true_tracts, inferred_tracts):
 
     if float(total_inferred_tracts) == 0: precision = np.nan
     else: precision = true_positives / float(total_inferred_tracts) * 100
-    recall = true_positives / float(total_true_tracts) * 100
+    if float(total_true_tracts) == 0: recall = np.nan
+    else: recall = true_positives / float(total_true_tracts) * 100
 
     return precision, recall
