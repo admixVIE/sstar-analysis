@@ -27,6 +27,7 @@ For tools that cannot be installed through `conda`, users could follow the comma
 
 	# Download SkovHMM
 	git clone https://github.com/LauritsSkov/Introgression-detection SkovHMM
+	git checkout 3d1865a56b8fdecc2768448e6cb982a157c37c50
 
 	# Download ArchaicSeeker2.0
 	git clone https://github.com/Shuhua-Group/ArchaicSeeker2.0
