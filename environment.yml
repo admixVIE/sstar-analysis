@@ -24,7 +24,7 @@ dependencies:
   - scikit-learn
   - scipy
   - seaborn
-  - snakemake
+  - snakemake=7.1.1
   - tabix
   - tskit
   - vcftools
